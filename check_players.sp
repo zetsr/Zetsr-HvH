@@ -12,7 +12,7 @@ public Plugin myinfo =
 public void OnPluginStart()
 {
     // 注册命令，使其出现在 sm_help 中
-    RegConsoleCmd("check_players", Command_Players, "输入!players，显示当前在线的玩家和 Bot 数量");
+    RegConsoleCmd("players", Command_Players, "显示当前在线的玩家和 Bot 数量");
 }
 
 public Action Command_Players(int client, int args)
