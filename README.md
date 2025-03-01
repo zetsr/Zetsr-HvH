@@ -13,3 +13,7 @@
 ### Land_Inaccuracy_FIX.sp
 
 移除玩家的落地不精准度。
+
+### healthshot_reward.sp
+
+给打出精彩操作的玩家添加治疗针。
