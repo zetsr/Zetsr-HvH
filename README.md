@@ -17,3 +17,7 @@
 ### healthshot_reward.sp
 
 给打出精彩操作的玩家添加治疗针。
+
+### player_agents.sp
+
+数人!agent选择探员，拥有根据阵营筛选的功能以及存档文件。
