@@ -81,3 +81,8 @@ force_install_dir /root/csgo_ds
 login anonymous
 app_update 740
 ```
+---
+### 修复运行库问题
+```
+cp /usr/lib32/libgcc_s.so.1 /root/csgo_ds/bin
+```
