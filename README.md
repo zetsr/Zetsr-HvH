@@ -21,3 +21,7 @@
 ### player_agents.sp
 
 数人!agent选择探员，拥有根据阵营筛选的功能以及存档文件。
+
+### vote_next_map.sp
+
+在比赛下半场的第一回合开始后，让所有玩家投票决定下一场比赛游玩的地图，与vote_keep_map.sp冲突。
