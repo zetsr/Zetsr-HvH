@@ -19,6 +19,7 @@ char g_sMapNames[128][PLATFORM_MAX_PATH];
 bool g_bVoteEnded = false; // 投票是否已经结束
 int g_iEligibleVoters = 0; // 记录有资格投票的玩家数量
 int g_iVotesCast = 0; // 记录已投票的玩家数量
+bool g_bVoteInProgress = false; // 投票是否正在进行
 
 public Plugin myinfo = 
 {
@@ -38,6 +39,8 @@ public void OnPluginStart()
     {
         SetFailState("无法找到 'nextlevel' ConVar，插件无法工作。");
     }
+    AddCommandListener(Command_Say, "say");
+    AddCommandListener(Command_Say, "say_team");
 }
 
 public void OnMapStart()
@@ -85,9 +88,45 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
     int halfTimeRound = maxRounds / 2;
     int roundsPlayed = GetTeamScore(2) + GetTeamScore(3);
 
-    if (roundsPlayed == halfTimeRound)
+    if (roundsPlayed == halfTimeRound && !g_bVoteInProgress)
     {
         StartMapVote();
+    }
+    return Plugin_Continue;
+}
+
+public Action Command_Say(int client, const char[] command, int args)
+{
+    if (client == 0 || !IsClientInGame(client) || IsFakeClient(client))
+    {
+        return Plugin_Continue;
+    }
+
+    char text[192];
+    GetCmdArgString(text, sizeof(text));
+    StripQuotes(text);
+    TrimString(text);
+
+    if (StrEqual(text, "!rtv", false) || StrEqual(text, "rtv", false))
+    {
+        AdminId admin = GetUserAdmin(client);
+        if (admin != INVALID_ADMIN_ID && GetAdminFlag(admin, Admin_Generic))
+        {
+            if (!g_bVoteInProgress)
+            {
+                StartMapVote();
+                CPrintToChatAll("{orange}[地图投票] {red}%N {default}发起了地图投票！", client);
+            }
+            else
+            {
+                CPrintToChat(client, "{orange}[地图投票] {default}投票正在进行中，无法再次发起。");
+            }
+        }
+        else
+        {
+            CPrintToChat(client, "{orange}[地图投票] {default}只有管理员才能发起手动投票。");
+        }
+        return Plugin_Handled;
     }
     return Plugin_Continue;
 }
@@ -136,6 +175,7 @@ void StartMapVote()
     }
     g_hCountdownTimer = null;
     g_bVoteEnded = false; // 重置投票结束标志
+    g_bVoteInProgress = true; // 设置投票进行中
     g_hCountdownTimer = CreateTimer(1.0, Timer_Countdown, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 }
 
@@ -226,6 +266,7 @@ void EndVote()
     if (totalVotes == 0)
     {
         CPrintToChatAll("{orange}[地图投票] {default}没有收到有效投票，继续当前默认流程！");
+        g_bVoteInProgress = false; // 重置投票进行中标志
         return;
     }
 
@@ -264,4 +305,6 @@ void EndVote()
             CPrintToChatAll("{orange}[地图投票] {red}%s: {red}%d {default}票 {red}(%.2f%%)", g_sMapNames[i], g_iMapVotes[i], percentage);
         }
     }
+
+    g_bVoteInProgress = false; // 重置投票进行中标志
 }
