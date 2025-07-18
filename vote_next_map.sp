@@ -1,5 +1,6 @@
 #include <sourcemod>
 #include <sdktools>
+#include <colors>
 
 #pragma semicolon 1
 #pragma newdecls required
@@ -15,13 +16,16 @@ int g_iVotes[MAXPLAYERS + 1]; // 记录每个玩家投了哪张地图
 int g_iMapVotes[128]; // 记录每张地图被投了多少票
 int g_iMapCount = 0;
 char g_sMapNames[128][PLATFORM_MAX_PATH];
+bool g_bVoteEnded = false; // 投票是否已经结束
+int g_iEligibleVoters = 0; // 记录有资格投票的玩家数量
+int g_iVotesCast = 0; // 记录已投票的玩家数量
 
 public Plugin myinfo = 
 {
     name = "半场换地图投票",
     author = "zetsr + ChatGPT改进",
     description = "半场换边后投票决定下一局地图",
-    version = "2.0",
+    version = "2.1",
     url = "https://github.com/zetsr"
 };
 
@@ -92,7 +96,7 @@ void StartMapVote()
 {
     if (g_iMapCount == 0)
     {
-        PrintToChatAll("\x04[地图投票] 没有可供投票的地图！");
+        CPrintToChatAll("{orange}[地图投票] {default}没有可供投票的地图！");
         return;
     }
 
@@ -114,21 +118,24 @@ void StartMapVote()
     g_hVoteMenu.ExitButton = false;
 
     int players[MAXPLAYERS + 1];
-    int playerCount = 0;
+    g_iEligibleVoters = 0;
+    g_iVotesCast = 0;
     for (int i = 1; i <= MaxClients; i++)
     {
         if (IsClientInGame(i) && !IsFakeClient(i))
         {
-            players[playerCount++] = i;
+            players[g_iEligibleVoters++] = i;
+            g_iVotes[i] = -1; // 初始化玩家投票记录
         }
     }
-    g_hVoteMenu.DisplayVote(players, playerCount, 20.0);
+    g_hVoteMenu.DisplayVote(players, g_iEligibleVoters, 20.0);
 
     if (g_hCountdownTimer != null && IsValidHandle(g_hCountdownTimer))
     {
         KillTimer(g_hCountdownTimer);
     }
     g_hCountdownTimer = null;
+    g_bVoteEnded = false; // 重置投票结束标志
     g_hCountdownTimer = CreateTimer(1.0, Timer_Countdown, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 }
 
@@ -146,6 +153,7 @@ public Action Timer_Countdown(Handle timer)
     PrintCenterTextAll("投票结束，统计结果中...");
     g_hCountdownTimer = null;
     timeLeft = 20;
+    g_bVoteEnded = true; // 设置投票结束标志
     EndVote();
     return Plugin_Stop;
 }
@@ -154,6 +162,11 @@ public int Menu_VoteHandler(Menu menu, MenuAction action, int param1, int param2
 {
     if (action == MenuAction_Select)
     {
+        if (g_bVoteEnded)
+        {
+            // 投票已经结束，忽略此投票
+            return 0;
+        }
         int client = param1;
         char mapName[PLATFORM_MAX_PATH];
         menu.GetItem(param2, mapName, sizeof(mapName));
@@ -164,13 +177,27 @@ public int Menu_VoteHandler(Menu menu, MenuAction action, int param1, int param2
             {
                 g_iMapVotes[i]++;
                 g_iVotes[client] = i;
+                g_iVotesCast++;
                 break;
             }
         }
 
         char clientName[MAX_NAME_LENGTH];
         GetClientName(client, clientName, sizeof(clientName));
-        PrintToChatAll("\x04[地图投票] %s 投票给了 %s", clientName, mapName);
+        CPrintToChatAll("{orange}[地图投票] {red}%s {default}投票给了 {red}%s", clientName, mapName);
+
+        // 检查是否所有玩家都已投票
+        if (g_iVotesCast >= g_iEligibleVoters)
+        {
+            g_bVoteEnded = true;
+            PrintCenterTextAll("所有玩家已投票，统计结果中...");
+            if (g_hCountdownTimer != null && IsValidHandle(g_hCountdownTimer))
+            {
+                KillTimer(g_hCountdownTimer);
+                g_hCountdownTimer = null;
+            }
+            EndVote();
+        }
     }
     else if (action == MenuAction_End)
     {
@@ -181,6 +208,27 @@ public int Menu_VoteHandler(Menu menu, MenuAction action, int param1, int param2
 
 void EndVote()
 {
+    // 取消所有玩家的投票菜单
+    for (int i = 1; i <= MaxClients; i++)
+    {
+        if (IsClientInGame(i) && !IsFakeClient(i))
+        {
+            CancelClientMenu(i);
+        }
+    }
+
+    int totalVotes = 0;
+    for (int i = 0; i < g_iMapCount; i++)
+    {
+        totalVotes += g_iMapVotes[i];
+    }
+
+    if (totalVotes == 0)
+    {
+        CPrintToChatAll("{orange}[地图投票] {default}没有收到有效投票，继续当前默认流程！");
+        return;
+    }
+
     int highestVotes = -1;
     int winnerIndices[128];
     int winnerCount = 0;
@@ -199,17 +247,21 @@ void EndVote()
         }
     }
 
-    if (winnerCount == 0)
-    {
-        PrintToChatAll("\x04[地图投票] 没有收到有效投票，继续当前默认流程！");
-        return;
-    }
-
     int selected = winnerIndices[GetRandomInt(0, winnerCount - 1)];
     char nextMap[PLATFORM_MAX_PATH];
     strcopy(nextMap, sizeof(nextMap), g_sMapNames[selected]);
     
     g_hNextLevel.SetString(nextMap);
 
-    PrintToChatAll("\x04[地图投票] 投票结果：下一局地图为 \x03%s\x04！", nextMap);
+    CPrintToChatAll("{orange}[地图投票] {default}投票结果：下一局地图为 {red}%s{default}！", nextMap);
+
+    // 显示每张地图的得票数和百分比
+    for (int i = 0; i < g_iMapCount; i++)
+    {
+        if (g_iMapVotes[i] > 0)
+        {
+            float percentage = (float(g_iMapVotes[i]) / float(totalVotes)) * 100.0;
+            CPrintToChatAll("{orange}[地图投票] {red}%s: {red}%d {default}票 {red}(%.2f%%)", g_sMapNames[i], g_iMapVotes[i], percentage);
+        }
+    }
 }
