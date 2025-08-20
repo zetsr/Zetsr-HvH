@@ -13,6 +13,7 @@
 #include <sdkhooks>
 #include <sdktools>
 #include <cstrike>
+#include <colors>
 
 #pragma semicolon 1
 #pragma newdecls required
@@ -433,7 +434,7 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
         {
             char disp[64];
             GetWeaponDisplayName(wname, disp, sizeof(disp));
-            PrintCenterText(client, "刷枪限制：在 %d tick 内禁止多次注册开火（%s 的第二发已被阻止）", allow, disp);
+            CPrintToChat(client, "{red}[Zetsr HvH] {orange}速射限制：在 %d tick 内禁止多次注册开火！", allow, disp);
         }
 
         LogMessage("AntiDouble: client %d second shot blocked for %s (tick delta %d <= %d)", client, wname, currentTick - g_LastShotTick[client], allow);
