@@ -1,14 +1,3 @@
-/**
- * ganla.sp - Anti double-tap (block 2nd shot) using weapon_fire event + RunCmd interception
- * 1) 使用 weapon_fire 事件尽早记录“开火事实”
- * 2) 在 OnPlayerRunCmd 阶段拦截第二次按键（清除 IN_ATTACK 并返回 Plugin_Changed）
- * 3) 修复下蹲伤害重复缩放（同 tick 只缩放一次）
- * 4) 保留购买限制 / 持有移除 / 挂机检测等功能
- *
- * 注意：此版本为兼容性优先，未使用 CreateConVar（避免不同 SM 版本签名差异导致编译错误）。
- * 如需 ConVar 可配置版，请回复我，我会直接发回兼容多版本的ConVar实现。
- */
-
 #include <sourcemod>
 #include <sdkhooks>
 #include <sdktools>
@@ -23,7 +12,7 @@ public Plugin myinfo =
     name    = "Crouch & Idle Penalty with Weapon Restrictions + Improved Anti-DoubleTap",
     author  = "ChatGPT & Optimized by Grok",
     description = "Crouch damage scale, idle punishment, weapon purchase restrictions, and robust anti-double-tap (blocks 2nd shot)",
-    version = "1.5.1",
+    version = "1.5.4", // 更新版本号以标记修复
     url     = ""
 };
 
@@ -34,6 +23,7 @@ public Plugin myinfo =
 #define DAMAGE_TIME 10            // 扣血时间（秒）
 #define CROUCH_SCALE 0.5          // 下蹲伤害倍率
 #define DEFAULT_ALLOW_DT_TICKS 5  // 默认允许的最小间隔（tick），小于等于视为 double-tap
+#define DT_BLOCK_DELAY 0.2        // double tap阻塞时强制延迟下次射击的时间（秒），可调整
 
 // 如果你希望管理员可以在线调整，把下面改成 ConVar 版本（需要我提供）
 int g_allow_dt_ticks = DEFAULT_ALLOW_DT_TICKS;
@@ -129,14 +119,15 @@ public void OnPluginStart()
 {
     HookEvent("player_spawn", OnPlayerSpawn, EventHookMode_Post);
     HookEvent("item_purchase", OnItemPurchase, EventHookMode_Post);
-
-    // 监听 weapon_fire（作为尽早的“开火事实”来源）
     HookEvent("weapon_fire", OnWeaponFire, EventHookMode_Post);
 
-    // Idle 检测 timer，用明确 data=0 避免占位符问题
-    g_hIdleTimer = CreateTimer(CHECK_INTERVAL, Timer_CheckIdle, 0, TIMER_REPEAT);
+    // 初始化定时器
+    if (g_hIdleTimer == INVALID_HANDLE)
+    {
+        g_hIdleTimer = CreateTimer(CHECK_INTERVAL, Timer_CheckIdle, 0, TIMER_REPEAT);
+    }
 
-    // 初始化数组并为当前已在线玩家注册 hooks
+    // 初始化所有玩家的数据
     for (int client = 1; client <= MaxClients; client++)
     {
         g_LastPos[client][0] = g_LastPos[client][1] = g_LastPos[client][2] = 0.0;
@@ -153,11 +144,57 @@ public void OnPluginStart()
         {
             SDKHook(client, SDKHook_OnTakeDamage, OnTakeDamage);
             SDKHook(client, SDKHook_WeaponEquipPost, OnWeaponEquipPost);
-            SDKHook(client, SDKHook_FireBulletsPost, FireBulletsHook); // 备份
+            SDKHook(client, SDKHook_FireBulletsPost, FireBulletsHook);
         }
     }
 
     PrintToServer("[ganla] 插件加载：Anti-DoubleTap (weapon_fire + RunCmd) 启用。默认允许间隔 ticks = %d", g_allow_dt_ticks);
+}
+
+// ========== 地图开始时重置定时器和状态 ==========
+public void OnMapStart()
+{
+    // 确保定时器在地图开始时正确初始化
+    if (g_hIdleTimer == INVALID_HANDLE)
+    {
+        g_hIdleTimer = CreateTimer(CHECK_INTERVAL, Timer_CheckIdle, 0, TIMER_REPEAT);
+        PrintToServer("[ganla] OnMapStart: 初始化挂机检测定时器");
+    }
+
+    // 重置所有玩家状态
+    for (int client = 1; client <= MaxClients; client++)
+    {
+        g_LastPos[client][0] = g_LastPos[client][1] = g_LastPos[client][2] = 0.0;
+        g_IdleTime[client] = 0;
+        g_LastShotTick[client] = 0;
+        g_LastDamageScaledTick[client] = 0;
+        g_ShotWindowStartTick[client] = 0;
+        g_ShotCountInWindow[client] = 0;
+        g_bShotBlocked[client] = false;
+
+        if (g_hUnblockTimer[client] != INVALID_HANDLE)
+        {
+            CloseHandle(g_hUnblockTimer[client]);
+            g_hUnblockTimer[client] = INVALID_HANDLE;
+        }
+        if (g_hApplyTimer[client] != INVALID_HANDLE)
+        {
+            CloseHandle(g_hApplyTimer[client]);
+            g_hApplyTimer[client] = INVALID_HANDLE;
+        }
+
+        if (IsClientInGame(client))
+        {
+            float pos[3];
+            if (IsPlayerAlive(client))
+                GetClientAbsOrigin(client, pos);
+            else
+                pos[0] = pos[1] = pos[2] = 0.0;
+            CopyVec3(pos, g_LastPos[client]);
+        }
+    }
+
+    PrintToServer("[ganla] OnMapStart: 玩家状态和定时器已重置");
 }
 
 // ========== 客户端生命周期钩子 ==========
@@ -198,8 +235,16 @@ public void OnClientDisconnect(int client)
     g_ShotCountInWindow[client] = 0;
     g_bShotBlocked[client] = false;
 
-    if (g_hUnblockTimer[client] != INVALID_HANDLE) { CloseHandle(g_hUnblockTimer[client]); g_hUnblockTimer[client] = INVALID_HANDLE; }
-    if (g_hApplyTimer[client] != INVALID_HANDLE)  { CloseHandle(g_hApplyTimer[client]);  g_hApplyTimer[client] = INVALID_HANDLE; }
+    if (g_hUnblockTimer[client] != INVALID_HANDLE)
+    {
+        CloseHandle(g_hUnblockTimer[client]);
+        g_hUnblockTimer[client] = INVALID_HANDLE;
+    }
+    if (g_hApplyTimer[client] != INVALID_HANDLE)
+    {
+        CloseHandle(g_hApplyTimer[client]);
+        g_hApplyTimer[client] = INVALID_HANDLE;
+    }
 }
 
 public void OnPlayerSpawn(Event event, const char[] name, bool dontBroadcast)
@@ -223,12 +268,20 @@ public void OnPlayerSpawn(Event event, const char[] name, bool dontBroadcast)
         g_ShotCountInWindow[client] = 0;
         g_bShotBlocked[client] = false;
 
-        if (g_hUnblockTimer[client] != INVALID_HANDLE) { CloseHandle(g_hUnblockTimer[client]); g_hUnblockTimer[client] = INVALID_HANDLE; }
-        if (g_hApplyTimer[client] != INVALID_HANDLE)  { CloseHandle(g_hApplyTimer[client]);  g_hApplyTimer[client] = INVALID_HANDLE; }
+        if (g_hUnblockTimer[client] != INVALID_HANDLE)
+        {
+            CloseHandle(g_hUnblockTimer[client]);
+            g_hUnblockTimer[client] = INVALID_HANDLE;
+        }
+        if (g_hApplyTimer[client] != INVALID_HANDLE)
+        {
+            CloseHandle(g_hApplyTimer[client]);
+            g_hApplyTimer[client] = INVALID_HANDLE;
+        }
     }
 }
 
-// ========== 购买限制 ========== 
+// ========== 购买限制 ==========
 public Action OnItemPurchase(Event event, const char[] name, bool dontBroadcast)
 {
     int client = GetClientOfUserId(event.GetInt("userid"));
@@ -430,17 +483,19 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
         buttons &= ~IN_ATTACK;
         buttons &= ~IN_ATTACK2;
 
+        // 额外强制设置武器和玩家的下次攻击时间，以撤销/阻止射击执行
+        float nextTime = GetGameTime() + DT_BLOCK_DELAY;
+        SetEntPropFloat(hWeapon, Prop_Send, "m_flNextPrimaryAttack", nextTime);
+        SetEntPropFloat(client, Prop_Send, "m_flNextAttack", nextTime);
+
         if (show)
         {
             char disp[64];
             GetWeaponDisplayName(wname, disp, sizeof(disp));
-            CPrintToChat(client, "{red}[Zetsr HvH] {orange}速射限制：在 %d tick 内禁止多次注册开火！", allow, disp);
+            CPrintToChat(client, "{red}[Zetsr HvH] {orange}速射限制：%s 在 %d tick 内禁止多次注册开火！", disp, allow);
         }
 
-        LogMessage("AntiDouble: client %d second shot blocked for %s (tick delta %d <= %d)", client, wname, currentTick - g_LastShotTick[client], allow);
-
-        // 更新 last shot tick，避免极端连续短按产生大量提示
-        g_LastShotTick[client] = currentTick;
+        LogMessage("AntiDouble: client %d second shot blocked for %s (tick delta %d <= %d), forced delay %.2f sec", client, wname, currentTick - g_LastShotTick[client], allow, DT_BLOCK_DELAY);
 
         return Plugin_Changed;
     }
@@ -451,18 +506,32 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 // ========== 地图结束/卸载清理 ==========
 public void OnMapEnd()
 {
-    if (g_hIdleTimer != INVALID_HANDLE) { CloseHandle(g_hIdleTimer); g_hIdleTimer = INVALID_HANDLE; }
+    if (g_hIdleTimer != INVALID_HANDLE)
+    {
+        CloseHandle(g_hIdleTimer);
+        g_hIdleTimer = INVALID_HANDLE;
+    }
 
     for (int i = 1; i <= MaxClients; i++)
     {
-        if (g_hUnblockTimer[i] != INVALID_HANDLE) { CloseHandle(g_hUnblockTimer[i]); g_hUnblockTimer[i] = INVALID_HANDLE; }
-        if (g_hApplyTimer[i] != INVALID_HANDLE)  { CloseHandle(g_hApplyTimer[i]);  g_hApplyTimer[i] = INVALID_HANDLE; }
+        if (g_hUnblockTimer[i] != INVALID_HANDLE)
+        {
+            CloseHandle(g_hUnblockTimer[i]);
+            g_hUnblockTimer[i] = INVALID_HANDLE;
+        }
+        if (g_hApplyTimer[i] != INVALID_HANDLE)
+        {
+            CloseHandle(g_hApplyTimer[i]);
+            g_hApplyTimer[i] = INVALID_HANDLE;
+        }
 
+        g_LastPos[i][0] = g_LastPos[i][1] = g_LastPos[i][2] = 0.0;
+        g_IdleTime[i] = 0;
         g_LastShotTick[i] = 0;
+        g_LastDamageScaledTick[i] = 0;
         g_ShotWindowStartTick[i] = 0;
         g_ShotCountInWindow[i] = 0;
         g_bShotBlocked[i] = false;
-        g_LastDamageScaledTick[i] = 0;
     }
 
     PrintToServer("[ganla] OnMapEnd: 清理完成。");
