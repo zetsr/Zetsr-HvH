@@ -86,3 +86,8 @@ app_update 740
 ```
 cp /usr/lib32/libgcc_s.so.1 /root/csgo_ds/bin
 ```
+### 如果要使用MySQL
+```
+apt install zlib1g:i386
+ln -sf /lib/i386-linux-gnu/libz.so.1 /lib/libz.so.1
+```
