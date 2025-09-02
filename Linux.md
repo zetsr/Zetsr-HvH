@@ -88,6 +88,18 @@ cp /usr/lib32/libgcc_s.so.1 /root/csgo_ds/bin
 ```
 ### 如果要使用MySQL
 ```
-apt install zlib1g:i386
+apt install zlib1g:i386 -y
 ln -sf /lib/i386-linux-gnu/libz.so.1 /lib/libz.so.1
+```
+### 查看硬件温度
+```
+watch -n 1 'for hw in /sys/class/hwmon/hwmon*; do 
+    name=$(cat "$hw/name"); 
+    for t in $hw/temp*_input; do 
+        num=$(basename "$t" | sed "s/temp\([0-9]*\)_input/\1/"); 
+        val=$(cat "$t"); 
+        temp=$(echo "scale=1; $val/1000" | bc); 
+        printf "%s temp%s: %s°C\n" "$name" "$num" "$temp"; 
+    done; 
+done'
 ```
