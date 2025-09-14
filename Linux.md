@@ -40,11 +40,7 @@ deb-src https://mirrors.ustc.edu.cn/debian/ bullseye-updates main contrib non-fr
 ---
 ### 设置虚拟内存 *可选*
 ```
-sudo fallocate -l 16G /swapfile
-sudo chmod 600 /swapfile
-sudo mkswap /swapfile
-sudo swapon /swapfile
-sudo sysctl vm.swappiness=100
+dd if=/dev/zero of=/root/swapfile bs=1M count=24576 && chmod 600 /root/swapfile && mkswap /root/swapfile && swapon /root/swapfile && sysctl vm.swappiness=100 && echo "/root/swapfile none swap sw 0 0" >> /etc/fstab && echo "vm.swappiness=100" >> /etc/sysctl.conf
 ```
 ---
 ### 设置每天凌晨三点自动重启 *可选*
