@@ -3,38 +3,45 @@
 #include <sdktools>
 #include <cstrike>
 #include <colors>
+#include <sdktools_tempents_stocks> // 提供 TE_SetupBeamRingPoint 等 stock
 
 #pragma semicolon 1
 #pragma newdecls required
 
 public Plugin myinfo =
 {
-    name    = "Crouch & Idle Penalty with Weapon Restrictions + Improved Anti-DoubleTap",
+    name    = "Crouch & Idle Penalty with Weapon Restrictions + Improved Anti-DoubleTap + AFK Ring Pulse",
     author  = "ChatGPT & Optimized by Grok",
-    description = "Crouch damage scale, idle punishment, weapon purchase restrictions, and robust anti-double-tap (blocks 2nd shot)",
-    version = "1.5.4", // 更新版本号以标记修复
+    description = "Crouch damage scale, idle punishment, weapon purchase restrictions, robust anti-double-tap (blocks 2nd shot), and AFK ring pulses",
+    version = "1.6.2",
     url     = ""
 };
 
-// ========== 配置（如需修改请直接改这些值） ==========
-#define CHECK_INTERVAL 1.0        // 每秒检测一次
+// ========== 配置 ==========
+#define CHECK_INTERVAL 1.0        // AFK检测间隔（秒）
 #define MOVE_THRESHOLD 100.0      // 移动阈值（单位）
 #define WARN_TIME 5               // 警告时间（秒）
 #define DAMAGE_TIME 10            // 扣血时间（秒）
-#define CROUCH_SCALE 0.5          // 下蹲伤害倍率
-#define DEFAULT_ALLOW_DT_TICKS 5  // 默认允许的最小间隔（tick），小于等于视为 double-tap
-#define DT_BLOCK_DELAY 0.2        // double tap阻塞时强制延迟下次射击的时间（秒），可调整
+#define CROUCH_SCALE 0.25         // 下蹲伤害倍率
+#define DEFAULT_ALLOW_DT_TICKS 5  // 双击容忍 ticks
+#define DT_BLOCK_DELAY 0.2        // 双击拦截后强制延时（秒）
+#define MSG_COOLDOWN_TICKS 10
+#define CROUCH_MSG_COOLDOWN_TICKS 10
 
-// 如果你希望管理员可以在线调整，把下面改成 ConVar 版本（需要我提供）
 int g_allow_dt_ticks = DEFAULT_ALLOW_DT_TICKS;
-bool g_show_msg = true; // 被阻止时是否显示中心提示
+bool g_show_msg = true;
 
 // ========== 全局数据 ==========
 float g_LastPos[MAXPLAYERS + 1][3];
 int   g_IdleTime[MAXPLAYERS + 1];
+int   g_TotalDeduct[MAXPLAYERS + 1];
 Handle g_hIdleTimer = INVALID_HANDLE;
 
-// 购买受限武器（classnames）
+// Beam ring sprite indices（Model & Halo）
+int g_BeamSprite = -1;
+int g_HaloSprite = -1;
+
+// 购买受限武器
 char g_RestrictedWeapons[][] = {
     "weapon_awp",
     "weapon_ssg08",
@@ -47,25 +54,24 @@ char g_RestrictedWeapons[][] = {
     "weapon_tagrenade"
 };
 
-// 关注的可 double-tap 武器（classnames）
+// double-tap 关注武器
 char g_DtWeapons[][] = {
     "weapon_scar20",
     "weapon_g3sg1",
     "weapon_deagle"
 };
 
-// 记录：上次“开火事实”的 tick（由 weapon_fire 事件写入）
 int g_LastShotTick[MAXPLAYERS + 1];
-
-// 下蹲伤害缩放保护（按 attacker），避免在同一 tick 重复缩放
 int g_LastDamageScaledTick[MAXPLAYERS + 1];
+int g_LastCrouchMsgTick[MAXPLAYERS + 1];
 
-// 备用字段（若以后加入 m_flNextPrimaryAttack 备份可以用）
 int g_ShotWindowStartTick[MAXPLAYERS + 1];
 int g_ShotCountInWindow[MAXPLAYERS + 1];
 bool g_bShotBlocked[MAXPLAYERS + 1];
 Handle g_hUnblockTimer[MAXPLAYERS + 1];
 Handle g_hApplyTimer[MAXPLAYERS + 1];
+
+int g_LastMsgTick[MAXPLAYERS + 1];
 
 // ========== 工具函数 ==========
 static bool IsValidAliveClient(int client)
@@ -114,6 +120,69 @@ static void GetWeaponDisplayName(const char[] weapon, char[] displayName, int ma
     else strcopy(displayName, maxLength, weapon);
 }
 
+static int GetCrouchReductionPercent()
+{
+    float reduction = (1.0 - CROUCH_SCALE) * 100.0;
+    return RoundToNearest(reduction);
+}
+
+// ========== 新增：在玩家坐标生成环形脉冲 ==========
+/**
+ * CreateRingPulse
+ * 在玩家位置生成一次 ring pulse（使用 TE_SetupBeamRingPoint）
+ * 参数说明（均可调整）：
+ *  - isDamage == true: 扣血阶段（更大更醒目）
+ *  - isDamage == false: 警告阶段（较小且短）
+ */
+static void CreateRingPulse(int client, bool isDamage)
+{
+    if (!IsValidAliveClient(client)) return;
+    if (g_BeamSprite <= 0 || g_HaloSprite <= 0) return; // 未预缓存
+
+    float center[3];
+    GetClientAbsOrigin(client, center);
+
+    // 可把脉冲放在脚底附近或稍高（此处抬高一点避免被地面遮挡）
+    center[2] += 8.0;
+
+    float startRadius;
+    float endRadius;
+    float life;
+    float width;
+    float amplitude;
+    int color[4];
+    int startFrame = 0;
+    int frameRate = 15;
+    int speed = 0;
+    int flags = 0; // 保持默认
+
+    if (isDamage)
+    {
+        startRadius = 10.0;
+        endRadius = 140.0; // 扣血阶段更大
+        life = 0.9;
+        width = 8.0;
+        amplitude = 0.0;
+        color[0] = 255; color[1] = 40; color[2] = 40; color[3] = 220; // 红色，alpha稍高
+    }
+    else
+    {
+        startRadius = 6.0;
+        endRadius = 80.0;  // 警告阶段较小
+        life = 0.6;
+        width = 6.0;
+        amplitude = 0.0;
+        color[0] = 255; color[1] = 165; color[2] = 0; color[3] = 200; // 橙色
+    }
+
+    // 建立并发送 ring（默认广播给所有人）
+    TE_SetupBeamRingPoint(center, startRadius, endRadius, g_BeamSprite, g_HaloSprite, startFrame, frameRate, life, width, amplitude, color, speed, flags);
+    TE_SendToAll();
+
+    // 如果你只想让本人看到，把上面 TE_SendToAll() 改为：
+    // TE_SendToClient(client);
+}
+
 // ========== 插件初始化 ==========
 public void OnPluginStart()
 {
@@ -121,24 +190,40 @@ public void OnPluginStart()
     HookEvent("item_purchase", OnItemPurchase, EventHookMode_Post);
     HookEvent("weapon_fire", OnWeaponFire, EventHookMode_Post);
 
+    // 预缓存 beam/halo sprite（常见路径，CS:GO 环境广泛可用）
+    g_BeamSprite = PrecacheModel("materials/sprites/laserbeam.vmt", true);
+    g_HaloSprite = PrecacheModel("materials/sprites/glow01.vmt", true);
+
+    if (g_BeamSprite <= 0 || g_HaloSprite <= 0)
+    {
+        PrintToServer("[ganla] 注意：无法预缓存 beam/halo sprite，环形脉冲将不可用（检查服务器是否有这些文件）");
+    }
+    else
+    {
+        PrintToServer("[ganla] Beam sprite 预缓存成功 (beam=%d, halo=%d)", g_BeamSprite, g_HaloSprite);
+    }
+
     // 初始化定时器
     if (g_hIdleTimer == INVALID_HANDLE)
     {
         g_hIdleTimer = CreateTimer(CHECK_INTERVAL, Timer_CheckIdle, 0, TIMER_REPEAT);
     }
 
-    // 初始化所有玩家的数据
+    // 初始化玩家数据
     for (int client = 1; client <= MaxClients; client++)
     {
         g_LastPos[client][0] = g_LastPos[client][1] = g_LastPos[client][2] = 0.0;
         g_IdleTime[client] = 0;
+        g_TotalDeduct[client] = 0;
         g_LastShotTick[client] = 0;
         g_LastDamageScaledTick[client] = 0;
+        g_LastCrouchMsgTick[client] = 0;
         g_ShotWindowStartTick[client] = 0;
         g_ShotCountInWindow[client] = 0;
         g_bShotBlocked[client] = false;
         g_hUnblockTimer[client] = INVALID_HANDLE;
         g_hApplyTimer[client] = INVALID_HANDLE;
+        g_LastMsgTick[client] = 0;
 
         if (IsClientInGame(client))
         {
@@ -148,29 +233,39 @@ public void OnPluginStart()
         }
     }
 
-    PrintToServer("[ganla] 插件加载：Anti-DoubleTap (weapon_fire + RunCmd) 启用。默认允许间隔 ticks = %d", g_allow_dt_ticks);
+    int reduction = GetCrouchReductionPercent();
+    PrintToServer("[ganla] 插件加载：AFK ring 脉冲已启用。下蹲减伤 %d%%。AFK检测间隔 %.1fs。默认允许间隔 ticks = %d", reduction, CHECK_INTERVAL, g_allow_dt_ticks);
 }
 
-// ========== 地图开始时重置定时器和状态 ==========
+// ========== OnMapStart ==========
 public void OnMapStart()
 {
-    // 确保定时器在地图开始时正确初始化
     if (g_hIdleTimer == INVALID_HANDLE)
     {
         g_hIdleTimer = CreateTimer(CHECK_INTERVAL, Timer_CheckIdle, 0, TIMER_REPEAT);
-        PrintToServer("[ganla] OnMapStart: 初始化挂机检测定时器");
     }
 
-    // 重置所有玩家状态
+    // 重新尝试预缓存（mapchange 后有时需要）
+    if (g_BeamSprite <= 0 || g_HaloSprite <= 0)
+    {
+        g_BeamSprite = PrecacheModel("materials/sprites/laserbeam.vmt", true);
+        g_HaloSprite = PrecacheModel("materials/sprites/glow01.vmt", true);
+        if (g_BeamSprite > 0 && g_HaloSprite > 0)
+            PrintToServer("[ganla] OnMapStart: 重新预缓存 beam/halo 成功 (beam=%d, halo=%d)", g_BeamSprite, g_HaloSprite);
+    }
+
     for (int client = 1; client <= MaxClients; client++)
     {
         g_LastPos[client][0] = g_LastPos[client][1] = g_LastPos[client][2] = 0.0;
         g_IdleTime[client] = 0;
+        g_TotalDeduct[client] = 0;
         g_LastShotTick[client] = 0;
         g_LastDamageScaledTick[client] = 0;
+        g_LastCrouchMsgTick[client] = 0;
         g_ShotWindowStartTick[client] = 0;
         g_ShotCountInWindow[client] = 0;
         g_bShotBlocked[client] = false;
+        g_LastMsgTick[client] = 0;
 
         if (g_hUnblockTimer[client] != INVALID_HANDLE)
         {
@@ -212,13 +307,16 @@ public void OnClientPutInServer(int client)
 
     CopyVec3(pos, g_LastPos[client]);
     g_IdleTime[client] = 0;
+    g_TotalDeduct[client] = 0;
     g_LastShotTick[client] = 0;
     g_LastDamageScaledTick[client] = 0;
+    g_LastCrouchMsgTick[client] = 0;
     g_ShotWindowStartTick[client] = 0;
     g_ShotCountInWindow[client] = 0;
     g_bShotBlocked[client] = false;
     g_hUnblockTimer[client] = INVALID_HANDLE;
     g_hApplyTimer[client] = INVALID_HANDLE;
+    g_LastMsgTick[client] = 0;
 }
 
 public void OnClientDisconnect(int client)
@@ -229,11 +327,14 @@ public void OnClientDisconnect(int client)
 
     g_LastPos[client][0] = g_LastPos[client][1] = g_LastPos[client][2] = 0.0;
     g_IdleTime[client] = 0;
+    g_TotalDeduct[client] = 0;
     g_LastShotTick[client] = 0;
     g_LastDamageScaledTick[client] = 0;
+    g_LastCrouchMsgTick[client] = 0;
     g_ShotWindowStartTick[client] = 0;
     g_ShotCountInWindow[client] = 0;
     g_bShotBlocked[client] = false;
+    g_LastMsgTick[client] = 0;
 
     if (g_hUnblockTimer[client] != INVALID_HANDLE)
     {
@@ -262,11 +363,14 @@ public void OnPlayerSpawn(Event event, const char[] name, bool dontBroadcast)
         GetClientAbsOrigin(client, pos);
         CopyVec3(pos, g_LastPos[client]);
         g_IdleTime[client] = 0;
+        g_TotalDeduct[client] = 0;
         g_LastShotTick[client] = 0;
         g_LastDamageScaledTick[client] = 0;
+        g_LastCrouchMsgTick[client] = 0;
         g_ShotWindowStartTick[client] = 0;
         g_ShotCountInWindow[client] = 0;
         g_bShotBlocked[client] = false;
+        g_LastMsgTick[client] = 0;
 
         if (g_hUnblockTimer[client] != INVALID_HANDLE)
         {
@@ -323,7 +427,7 @@ public void OnWeaponEquipPost(int client, int weapon)
     }
 }
 
-// ========== 下蹲伤害 BUG 修复（同一 tick 只缩放一次） ==========
+// ========== 下蹲伤害缩放 ==========
 public Action OnTakeDamage(int victim, int &attacker, int &inflictor, float &damage, int &damagetype)
 {
     if (!IsValidAliveClient(victim) || attacker <= 0 || attacker > MaxClients) return Plugin_Continue;
@@ -334,7 +438,6 @@ public Action OnTakeDamage(int victim, int &attacker, int &inflictor, float &dam
         int currentTick = GetGameTickCount();
         if (g_LastDamageScaledTick[attacker] == currentTick)
         {
-            // 已在当前 tick 缩放过
             return Plugin_Continue;
         }
 
@@ -342,8 +445,9 @@ public Action OnTakeDamage(int victim, int &attacker, int &inflictor, float &dam
         damage *= CROUCH_SCALE;
         g_LastDamageScaledTick[attacker] = currentTick;
 
-        PrintHintText(attacker, "您处于下蹲状态，伤害降低50%%");
-        LogMessage("玩家 %N 下蹲攻击, damage %.2f -> %.2f (tick=%d)", attacker, original, damage, currentTick);
+        int reduction = GetCrouchReductionPercent();
+        PrintHintText(attacker, "您处于下蹲状态，伤害降低%d%%", reduction);
+        LogMessage("玩家 %N 下蹲攻击, damage %.2f -> %.2f (tick=%d, reduction=%d%%)", attacker, original, damage, currentTick, reduction);
 
         return Plugin_Changed;
     }
@@ -351,17 +455,78 @@ public Action OnTakeDamage(int victim, int &attacker, int &inflictor, float &dam
     return Plugin_Continue;
 }
 
-// ========== 每秒检测：挂机惩罚 & 下蹲提示 & 武器移除 ==========
+// ========== RunCmd：即时下蹲提示 + 双击检测 ==========
+public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3], float angles[3], int &weapon, int &subtype, int &cmdnum, int &tickcount, int &seed, int mouse[2])
+{
+    if (!IsValidAliveClient(client)) return Plugin_Continue;
+
+    int currentTick = GetGameTickCount();
+
+    if (GetClientButtons(client) & IN_DUCK)
+    {
+        if (currentTick - g_LastCrouchMsgTick[client] >= CROUCH_MSG_COOLDOWN_TICKS)
+        {
+            int reduction = GetCrouchReductionPercent();
+            PrintHintText(client, "您处于下蹲状态，伤害降低%d%%", reduction);
+            g_LastCrouchMsgTick[client] = currentTick;
+            LogMessage("RunCmd Crouch Hint: client %d (tick=%d, reduction=%d%%)", client, currentTick, reduction);
+        }
+    }
+    else
+    {
+        if (currentTick - g_LastCrouchMsgTick[client] > CROUCH_MSG_COOLDOWN_TICKS * 2)
+        {
+            g_LastCrouchMsgTick[client] = 0;
+        }
+    }
+
+    // 双击拦截逻辑（保持原样）
+    if (!(buttons & IN_ATTACK)) return Plugin_Continue;
+
+    int allow = g_allow_dt_ticks;
+    bool show = g_show_msg;
+
+    int hWeapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
+    if (hWeapon == -1 || !IsValidEntity(hWeapon)) return Plugin_Continue;
+
+    char wname[64];
+    GetEntityClassname(hWeapon, wname, sizeof(wname));
+    if (!IsDtWeaponByClass(wname)) return Plugin_Continue;
+
+    if (g_LastShotTick[client] > 0 && (GetGameTickCount() - g_LastShotTick[client]) <= allow)
+    {
+        buttons &= ~IN_ATTACK;
+        buttons &= ~IN_ATTACK2;
+
+        float nextTime = GetGameTime() + DT_BLOCK_DELAY;
+        SetEntPropFloat(hWeapon, Prop_Send, "m_flNextPrimaryAttack", nextTime);
+        SetEntPropFloat(client, Prop_Send, "m_flNextAttack", nextTime);
+
+        if (show && (GetGameTickCount() - g_LastMsgTick[client] > MSG_COOLDOWN_TICKS))
+        {
+            char disp[64];
+            GetWeaponDisplayName(wname, disp, sizeof(disp));
+            CPrintToChat(client, "{red}新曙光 - {default}%s 禁止 DT", disp);
+            g_LastMsgTick[client] = GetGameTickCount();
+            LogMessage("Sync Print: client %d 双击被阻止 (weapon %s, forced delay %.2f sec)", client, wname, DT_BLOCK_DELAY);
+        }
+        else
+        {
+            LogMessage("Sync Block (no print): client %d 双击被阻止 (weapon %s, cooldown active)", client, wname);
+        }
+
+        return Plugin_Changed;
+    }
+
+    return Plugin_Continue;
+}
+
+// ========== 每 CHECK_INTERVAL 秒检测：挂机惩罚 & 武器移除（下蹲提示移到RunCmd） ==========
 public Action Timer_CheckIdle(Handle timer, any data)
 {
     for (int client = 1; client <= MaxClients; client++)
     {
         if (!IsValidAliveClient(client)) continue;
-
-        if (GetClientButtons(client) & IN_DUCK)
-        {
-            PrintHintText(client, "您处于下蹲状态，伤害降低50%%");
-        }
 
         float pos[3];
         GetClientAbsOrigin(client, pos);
@@ -375,17 +540,49 @@ public Action Timer_CheckIdle(Handle timer, any data)
             {
                 int left = DAMAGE_TIME - g_IdleTime[client];
                 PrintCenterText(client, "您因持续不移动还有 %d 秒将扣血", left);
+
+                // 警告阶段：每秒产生一个较弱的发光脉冲 / 环形脉冲
+                CreateRingPulse(client, false);
             }
 
             if (g_IdleTime[client] >= DAMAGE_TIME)
             {
                 int hp = GetClientHealth(client);
-                if (hp > 1) SetEntityHealth(client, hp - 1);
+                bool deducted = false;
+                if (hp > 1)
+                {
+                    SetEntityHealth(client, hp - 1);
+                    g_TotalDeduct[client]++;  // 仅实际扣血时增加
+                    deducted = true;
+                    LogMessage("AFK Deduct: client %d HP %d -> %d (total deduct now %d)", client, hp, hp-1, g_TotalDeduct[client]);
+                }
+
+                // 扣血阶段：使用更明显的脉冲
+                CreateRingPulse(client, true);
+
+                if (hp > 1 || !deducted)
+                {
+                    if (hp <= 1)
+                    {
+                        PrintCenterText(client, "您已被扣除 %d 血，血量已最低，继续不动将死亡！", g_TotalDeduct[client]);
+                    }
+                    else
+                    {
+                        PrintCenterText(client, "您已被扣除 %d 血，继续不动将持续扣血！", g_TotalDeduct[client]);
+                    }
+                }
             }
         }
         else
         {
-            g_IdleTime[client] = 0;
+            // 移动时重置
+            if (g_IdleTime[client] > 0)
+            {
+                g_IdleTime[client] = 0;
+                g_TotalDeduct[client] = 0;
+                // 修复：确保格式字符串的占位符与实际参数一致（之前少传 client 导致异常）
+                LogMessage("AFK Reset: client %d moved, total deduct reset to 0", client);
+            }
         }
 
         CopyVec3(pos, g_LastPos[client]);
@@ -409,7 +606,7 @@ public Action Timer_CheckIdle(Handle timer, any data)
     return Plugin_Continue;
 }
 
-// ========== weapon_fire 事件：尽早记录“开火事实” ==========
+// ========== weapon_fire（记录开火）==========
 public Action OnWeaponFire(Event event, const char[] name, bool dontBroadcast)
 {
     int userid = event.GetInt("userid");
@@ -426,7 +623,6 @@ public Action OnWeaponFire(Event event, const char[] name, bool dontBroadcast)
     int tick = GetGameTickCount();
     g_LastShotTick[client] = tick;
 
-    // 作为备份维护窗口计数
     int allow = g_allow_dt_ticks;
     int start = g_ShotWindowStartTick[client];
     int delta = 999999;
@@ -442,68 +638,32 @@ public Action OnWeaponFire(Event event, const char[] name, bool dontBroadcast)
         g_ShotCountInWindow[client]++;
     }
 
+    if (g_show_msg && g_ShotCountInWindow[client] > 1 && (tick - g_LastMsgTick[client] > MSG_COOLDOWN_TICKS))
+    {
+        char disp[64];
+        GetWeaponDisplayName(wpn, disp, sizeof(disp));
+        CPrintToChat(client, "{red}新曙光 - {default}%s 禁止 DT", disp);
+        g_LastMsgTick[client] = tick;
+        LogMessage("Async Print: client %d 双击滥用提交 (weapon %s, window_count=%d, delta=%d)", client, wpn, g_ShotCountInWindow[client], delta);
+    }
+
     LogMessage("OnWeaponFire: client %d weapon %s tick %d (window_count=%d)", client, wpn, tick, g_ShotCountInWindow[client]);
     return Plugin_Continue;
 }
 
-// ========== FireBulletsPost 备份（可选） ==========
+// ========== FireBulletsPost 备份 ==========
 public void FireBulletsHook(int client, int shots, const char[] weaponname)
 {
     if (!IsValidAliveClient(client)) return;
     if (!IsDtWeaponByClass(weaponname)) return;
 
     int tick = GetGameTickCount();
-    if (g_LastShotTick[client] == 0) g_LastShotTick[client] = tick; // 如果 weapon_fire 未触发，作为后备来源
+    if (g_LastShotTick[client] == 0) g_LastShotTick[client] = tick;
 
     LogMessage("FireBulletsHook: client %d fired %s (shots=%d) tick=%d", client, weaponname, shots, tick);
 }
 
-// ========== OnPlayerRunCmd：按键阶段拦截第二发 ==========
-public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3], float angles[3], int &weapon, int &subtype, int &cmdnum, int &tickcount, int &seed, int mouse[2])
-{
-    if (!IsValidAliveClient(client)) return Plugin_Continue;
-    if (!(buttons & IN_ATTACK)) return Plugin_Continue;
-
-    int allow = g_allow_dt_ticks;
-    bool show = g_show_msg;
-
-    int hWeapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
-    if (hWeapon == -1 || !IsValidEntity(hWeapon)) return Plugin_Continue;
-
-    char wname[64];
-    GetEntityClassname(hWeapon, wname, sizeof(wname));
-    if (!IsDtWeaponByClass(wname)) return Plugin_Continue;
-
-    int currentTick = GetGameTickCount();
-
-    // 如果最近一次“开火事实” tick 非 0，且与当前 tick 差 <= allow，则拦截本次（第二发）
-    if (g_LastShotTick[client] > 0 && (currentTick - g_LastShotTick[client]) <= allow)
-    {
-        // 清除按键中的 IN_ATTACK，返回 Plugin_Changed（更稳妥）
-        buttons &= ~IN_ATTACK;
-        buttons &= ~IN_ATTACK2;
-
-        // 额外强制设置武器和玩家的下次攻击时间，以撤销/阻止射击执行
-        float nextTime = GetGameTime() + DT_BLOCK_DELAY;
-        SetEntPropFloat(hWeapon, Prop_Send, "m_flNextPrimaryAttack", nextTime);
-        SetEntPropFloat(client, Prop_Send, "m_flNextAttack", nextTime);
-
-        if (show)
-        {
-            char disp[64];
-            GetWeaponDisplayName(wname, disp, sizeof(disp));
-            CPrintToChat(client, "{red}[Zetsr HvH] {orange}速射限制：%s 在 %d tick 内禁止多次注册开火！", disp, allow);
-        }
-
-        LogMessage("AntiDouble: client %d second shot blocked for %s (tick delta %d <= %d), forced delay %.2f sec", client, wname, currentTick - g_LastShotTick[client], allow, DT_BLOCK_DELAY);
-
-        return Plugin_Changed;
-    }
-
-    return Plugin_Continue;
-}
-
-// ========== 地图结束/卸载清理 ==========
+// ========== OnMapEnd ==========
 public void OnMapEnd()
 {
     if (g_hIdleTimer != INVALID_HANDLE)
@@ -527,11 +687,14 @@ public void OnMapEnd()
 
         g_LastPos[i][0] = g_LastPos[i][1] = g_LastPos[i][2] = 0.0;
         g_IdleTime[i] = 0;
+        g_TotalDeduct[i] = 0;
         g_LastShotTick[i] = 0;
         g_LastDamageScaledTick[i] = 0;
+        g_LastCrouchMsgTick[i] = 0;
         g_ShotWindowStartTick[i] = 0;
         g_ShotCountInWindow[i] = 0;
         g_bShotBlocked[i] = false;
+        g_LastMsgTick[i] = 0;
     }
 
     PrintToServer("[ganla] OnMapEnd: 清理完成。");
