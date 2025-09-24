@@ -87,6 +87,15 @@ cp /usr/lib32/libgcc_s.so.1 /root/csgo_ds/bin
 apt install zlib1g:i386 -y
 ln -sf /lib/i386-linux-gnu/libz.so.1 /lib/libz.so.1
 ```
+### 内核优化
+```
+wget -qO - https://dl.xanmod.org/archive.key | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/xanmod-archive-keyring.gpg
+echo 'deb http://deb.xanmod.org releases main' | sudo tee /etc/apt/sources.list.d/xanmod-release.list
+apt update
+apt install linux-xanmod-x64v3
+apt install amd64-microcode
+echo 'net.core.default_qdisc = cake' | sudo tee /etc/sysctl.d/90-override.conf
+```
 ### 查看硬件温度
 ```
 watch -n 1 'for hw in /sys/class/hwmon/hwmon*; do 
