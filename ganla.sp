@@ -13,7 +13,7 @@ public Plugin myinfo =
     name    = "Crouch & Idle Penalty with Weapon Restrictions + Improved Anti-DoubleTap + AFK Ring Pulse",
     author  = "ChatGPT & Optimized by Grok",
     description = "Crouch damage scale, idle punishment, weapon purchase restrictions, robust anti-double-tap (blocks 2nd shot), and AFK ring pulses",
-    version = "1.6.2",
+    version = "1.6.4", // 更新版本号以标记修复
     url     = ""
 };
 
@@ -41,7 +41,7 @@ Handle g_hIdleTimer = INVALID_HANDLE;
 int g_BeamSprite = -1;
 int g_HaloSprite = -1;
 
-// 购买受限武器
+// 购买受限武器（完整类名）
 char g_RestrictedWeapons[][] = {
     "weapon_awp",
     "weapon_ssg08",
@@ -187,7 +187,6 @@ static void CreateRingPulse(int client, bool isDamage)
 public void OnPluginStart()
 {
     HookEvent("player_spawn", OnPlayerSpawn, EventHookMode_Post);
-    HookEvent("item_purchase", OnItemPurchase, EventHookMode_Post);
     HookEvent("weapon_fire", OnWeaponFire, EventHookMode_Post);
 
     // 预缓存 beam/halo sprite（常见路径，CS:GO 环境广泛可用）
@@ -385,27 +384,27 @@ public void OnPlayerSpawn(Event event, const char[] name, bool dontBroadcast)
     }
 }
 
-// ========== 购买限制 ==========
-public Action OnItemPurchase(Event event, const char[] name, bool dontBroadcast)
+// ========== 购买限制：直接拦截购买命令 ==========
+public Action CS_OnBuyCommand(int client, const char[] weapon)
 {
-    int client = GetClientOfUserId(event.GetInt("userid"));
     if (!IsValidAliveClient(client)) return Plugin_Continue;
 
-    char weapon[64];
-    event.GetString("weapon", weapon, sizeof(weapon));
+    // 构建完整武器类名（添加 "weapon_" 前缀）
+    char fullWeapon[64];
+    Format(fullWeapon, sizeof(fullWeapon), "weapon_%s", weapon);
 
-    if (IsRestrictedWeapon(weapon))
+    if (IsRestrictedWeapon(fullWeapon))
     {
         char displayName[64];
-        GetWeaponDisplayName(weapon, displayName, sizeof(displayName));
+        GetWeaponDisplayName(fullWeapon, displayName, sizeof(displayName));
         PrintToChat(client, "\x04[限制]\x01 不能购买 %s", displayName);
-        return Plugin_Handled;
+        return Plugin_Handled; // 阻止购买
     }
 
     return Plugin_Continue;
 }
 
-// ========== 装备后检查并移除被禁止的武器 ==========
+// ========== 装备后检查并移除被禁止的武器（防止捡起等） ==========
 public void OnWeaponEquipPost(int client, int weapon)
 {
     if (!IsValidAliveClient(client)) return;
