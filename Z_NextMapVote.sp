@@ -82,11 +82,11 @@ public Action Command_RTV(int client, int args)
         if (!g_bVoteInProgress)
         {
             StartMapVote();
-            CPrintToChatAll("{orange}[地图投票] {red}控制台 {default}发起了地图投票！");
+            CPrintToChatAll("{default}新曙光 - {red}控制台 {default}发起了地图投票！");
         }
         else
         {
-            ReplyToCommand(client, "{orange}[地图投票] {default}投票正在进行中，无法再次发起。");
+            ReplyToCommand(client, "{red}[地图投票] {default}投票正在进行中，无法再次发起。");
         }
         return Plugin_Handled;
     }
@@ -122,7 +122,7 @@ public Action AttemptStartRTV(int client)
 
     if (g_bVoteInProgress)
     {
-        CPrintToChat(client, "{orange}[地图投票] {default}投票正在进行中，无法再次发起。");
+        CPrintToChat(client, "{default}新曙光 - {default}投票正在进行中，无法再次发起。");
         return Plugin_Handled;
     }
 
@@ -130,20 +130,20 @@ public Action AttemptStartRTV(int client)
     {
         // 管理员无限发起
         StartMapVote();
-        CPrintToChatAll("{orange}[地图投票] {red}%N {default}发起了地图投票！", client);
+        CPrintToChatAll("{default}新曙光 - {red}%N {default}发起了地图投票！", client);
     }
     else
     {
         // 非管理员检查发起次数
         if (g_iRTVUses[client] >= 1)
         {
-            CPrintToChat(client, "{orange}[地图投票] {default}您在本场比赛中已经发起过一次RTV，无法再次发起。");
+            CPrintToChat(client, "{default}新曙光 - {default}您在本场比赛中已经发起过一次RTV，无法再次发起。");
         }
         else
         {
             g_iRTVUses[client]++;
             StartMapVote();
-            CPrintToChatAll("{orange}[地图投票] {red}%N {default}发起了地图投票！", client);
+            CPrintToChatAll("{default}新曙光 - {red}%N {default}发起了地图投票！", client);
         }
     }
     return Plugin_Handled;
@@ -153,7 +153,7 @@ void StartMapVote()
 {
     if (g_iMapCount == 0)
     {
-        CPrintToChatAll("{orange}[地图投票] {default}没有可供投票的地图！");
+        CPrintToChatAll("{default}新曙光 - {default}没有可供投票的地图！");
         return;
     }
 
@@ -207,7 +207,7 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
     if (roundsPlayed == halfTimeRound && !g_bVoteInProgress)
     {
         StartMapVote();
-        CPrintToChatAll("{orange}[地图投票] {default}半场换边！请投票选择下一张地图（剩余20秒）。");
+        CPrintToChatAll("{default}新曙光 - {default}半场换边！请投票选择下一张地图（剩余20秒）。");
     }
     return Plugin_Continue;
 }
@@ -256,7 +256,7 @@ public int Menu_VoteHandler(Menu menu, MenuAction action, int param1, int param2
 
         char clientName[MAX_NAME_LENGTH];
         GetClientName(client, clientName, sizeof(clientName));
-        CPrintToChatAll("{orange}[地图投票] {red}%s {default}投票给了 {red}%s", clientName, mapName);
+        CPrintToChatAll("{default}新曙光 - {red}%s {default}投票给了 {red}%s", clientName, mapName);
 
         // 检查是否所有玩家都已投票
         if (g_iVotesCast >= g_iEligibleVoters)
@@ -298,7 +298,7 @@ void EndVote()
 
     if (totalVotes == 0)
     {
-        CPrintToChatAll("{orange}[地图投票] {default}没有收到有效投票，继续当前默认流程！");
+        CPrintToChatAll("{default}新曙光 - {default}没有收到有效投票，继续当前默认流程！");
         g_bVoteInProgress = false; // 重置投票进行中标志
         return;
     }
@@ -327,7 +327,7 @@ void EndVote()
     
     g_hNextLevel.SetString(nextMap);
 
-    CPrintToChatAll("{orange}[地图投票] {default}投票结果：下一局地图为 {red}%s{default}！", nextMap);
+    CPrintToChatAll("{default}新曙光 - {default}投票结果：下一局地图为 {red}%s{default}！", nextMap);
 
     // 显示每张地图的得票数和百分比
     for (int i = 0; i < g_iMapCount; i++)
@@ -335,7 +335,7 @@ void EndVote()
         if (g_iMapVotes[i] > 0)
         {
             float percentage = (float(g_iMapVotes[i]) / float(totalVotes)) * 100.0;
-            CPrintToChatAll("{orange}[地图投票] {red}%s: {red}%d {default}票 {red}(%.2f%%)", g_sMapNames[i], g_iMapVotes[i], percentage);
+            CPrintToChatAll("{default}新曙光 - {red}%s: {red}%d {default}票 {red}(%.2f%%)", g_sMapNames[i], g_iMapVotes[i], percentage);
         }
     }
 
