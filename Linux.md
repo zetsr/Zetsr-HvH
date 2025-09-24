@@ -1,4 +1,4 @@
-### 设置源 *Debian 12* *可选*
+/### 设置源 *Debian 12* *可选*
 ```
 # Debian 12 中科大
 # 默认镜像源
@@ -94,7 +94,8 @@ wget -qO - https://dl.xanmod.org/archive.key | sudo gpg --dearmor -o /etc/apt/tr
 echo 'deb http://deb.xanmod.org releases main' | sudo tee /etc/apt/sources.list.d/xanmod-release.list
 apt update
 apt install linux-xanmod-x64v3
-apt install amd64-microcode
+# apt install intel-microcode iucode-tool
+# apt install amd64-microcode
 echo 'net.core.default_qdisc = cake' | sudo tee /etc/sysctl.d/90-override.conf
 sudo apt install tuned
 sudo tuned-adm profile latency-performance
