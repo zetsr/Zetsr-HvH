@@ -97,8 +97,9 @@ apt install linux-xanmod-x64v3
 # apt install intel-microcode iucode-tool
 # apt install amd64-microcode
 echo 'net.core.default_qdisc = cake' | sudo tee /etc/sysctl.d/90-override.conf
-sudo apt install tuned
-sudo tuned-adm profile latency-performance
+apt install tuned
+tuned-adm profile latency-performance
+reboot
 ```
 ### 查看硬件温度
 ```
