@@ -10,7 +10,7 @@
 
 #define PLUGIN_VERSION "1.0"
 
-#define GUILD_NAME_MAX_LENGTH 10 // 行会名称最大字符长度
+#define GUILD_NAME_MAX_LENGTH 16 // 行会名称最大字符长度
 #define CONFIRMATION_TIMEOUT 10.0 // 确认操作的超时时间（秒）
 
 // --- 全局变量 --- //
