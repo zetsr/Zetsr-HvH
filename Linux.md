@@ -1,4 +1,4 @@
-/### 设置源 *Debian 13* *可选*
+### 设置源 *Debian 13* *可选*
 ```
 # 清华大学 Debian 13 镜像源
 deb https://mirrors.tuna.tsinghua.edu.cn/debian/ trixie main contrib non-free
