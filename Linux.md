@@ -1,4 +1,12 @@
-/### 设置源 *Debian 12* *可选*
+/### 设置源 *Debian 13* *可选*
+```
+# 清华大学 Debian 13 镜像源
+deb https://mirrors.tuna.tsinghua.edu.cn/debian/ trixie main contrib non-free
+deb https://mirrors.tuna.tsinghua.edu.cn/debian/ trixie-updates main contrib non-free
+deb https://mirrors.tuna.tsinghua.edu.cn/debian/ trixie-backports main contrib non-free
+deb https://mirrors.tuna.tsinghua.edu.cn/debian-security trixie-security main contrib non-free
+```
+### 设置源 *Debian 12* *可选*
 ```
 # Debian 12 中科大
 # 默认镜像源
@@ -112,4 +120,19 @@ watch -n 1 'for hw in /sys/class/hwmon/hwmon*; do
         printf "%s temp%s: %s°C\n" "$name" "$num" "$temp"; 
     done; 
 done'
+```
+### 将 *Debian 12* 升级到 *Debian13*
+```
+apt update
+apt upgrade --without-new-pkgs -y
+apt full-upgrade -y
+apt autoremove --purge
+apt autoclean
+reboot
+# 修改/etc/apt/sources.list为Debian 13源
+apt update
+apt full-upgrade -y
+apt autoremove --purge
+apt autoclean
+reboot
 ```
