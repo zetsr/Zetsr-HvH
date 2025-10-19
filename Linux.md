@@ -97,15 +97,13 @@ ln -sf /lib/i386-linux-gnu/libz.so.1 /lib/libz.so.1
 ```
 ### 内核优化
 ```
-sudo apt install gnupg
+sudo apt install gnupg -y
 wget -qO - https://dl.xanmod.org/archive.key | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/xanmod-archive-keyring.gpg
 echo 'deb http://deb.xanmod.org releases main' | sudo tee /etc/apt/sources.list.d/xanmod-release.list
 apt update
-apt install linux-xanmod-x64v3
-# apt install intel-microcode iucode-tool
-# apt install amd64-microcode
+apt install linux-xanmod-x64v3 -y
 echo 'net.core.default_qdisc = cake' | sudo tee /etc/sysctl.d/90-override.conf
-apt install tuned
+apt install tuned -y
 tuned-adm profile latency-performance
 reboot
 ```
